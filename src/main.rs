@@ -1,39 +1,57 @@
 
 use anyhow::{bail, Result};
-use std::{time, process};
+use std::{time, path::Path, io::Read};
 
-use opencv::{
-	highgui,
-	prelude::*,
-	imgproc,
-	videoio, 
-    core,
+//use opencv::{
+//	highgui,
+//	prelude::*,
+//	imgproc,
+//	videoio, 
+//    core,
+//};
+
+use linuxvideo::{
+    format::{PixFormat, Pixelformat},
+    Device,
 };
 
-const MODEL: &str   = "data/yolov7-tiny.pt";
-const WIDTH: i32    = 640;
-const HEIGHT: i32   = 480;
-const WINDOW_NAME: &str    = "YOLO Object Detection";
+const MODEL: &str           = "models/yolov5s.torchscript";
+const WIDTH: i32            = 640;
+const HEIGHT: i32           = 480;
+const WINDOW_NAME: &str     = "YOLO Object Detection";
 
 pub fn main() -> Result<()>{
     // create empty window named 'frame'
-    highgui::named_window(WINDOW_NAME, highgui::WINDOW_NORMAL)?;
-    highgui::resize_window(WINDOW_NAME, 640, 480)?;
+    //highgui::named_window(WINDOW_NAME, highgui::WINDOW_NORMAL)?;
+    //highgui::resize_window(WINDOW_NAME, 640, 480)?;
 
     // load jit model and put it to cuda
-    let mut model = tch::CModule::load(MODEL)?;   
+    let mut model = tch::CModule::load_on_device(MODEL, tch::Device::Cpu)?;   
     model.set_eval(); 
-    model.to(tch::Device::Cpu, tch::Kind::Float, false);
+    // model.to(tch::Device::Cpu, tch::Kind::Float, false);
 
     // create empty Mat to store image data
-    let mut frame = Mat::default();
+    //let mut frame = Mat::default();
 
-    // Open the web-camera (assuming you have one)
-    let mut cam = videoio::VideoCapture::new(0, videoio::CAP_ANY)?;
+    //// Open the web-camera (assuming you have one)
+    //let mut cam = videoio::VideoCapture::new(0, videoio::CAP_ANY)?;
+
+    let device = Device::open(Path::new("/dev/video0"))
+        .expect("Unable to open camera device");
+
+    let mut capture = device.video_capture(PixFormat::new(WIDTH as u32, HEIGHT as u32, Pixelformat::JPEG))
+            .expect("Error opening video capture device");
+
+    println!("negotiated format: {:?}", capture.format());
+
+    let mut stream = capture.into_stream(2)
+        .expect("Error creating camera stream");
+    
+    println!("stream started, waiting for data");
 
     loop {
         // read frame to empty mat 
-        cam.read(&mut frame)?;
+        //cam.read(&mut frame)?;
         
         // resize image
         //let mut resized = Mat::default();   
@@ -45,33 +63,36 @@ pub fn main() -> Result<()>{
         //// get data from Mat 
         //let h = resized.size()?.height;
         //let w = resized.size()?.width;   
-        let resized_data = frame.data_bytes_mut()?; 
-        // convert bytes to tensor
-        let tensor = tch::Tensor::of_data_size(resized_data, &[HEIGHT as i64, WIDTH as i64, 3], tch::Kind::Uint8);  
-        // normalize image tensor
-        let tensor = tensor.to_kind(tch::Kind::Float) / 255;
-        // carry tensor to cuda
-        // let tensor = tensor.to_device(tch::Device::Cuda(0)); 
-        let tensor = tensor.to_device(tch::Device::Cpu); 
-        // convert (H, W, C) to (C, H, W)
-        let tensor = tensor.permute(&[2, 0, 1]); 
-        // add batch dim (convert (C, H, W) to (N, C, H, W)) 
-        let normalized_tensor = tensor.unsqueeze(0);   
+        //let resized_data = frame.data_bytes_mut()?; 
+        //// convert bytes to tensor
+        //let tensor = tch::Tensor::of_data_size(resized_data, &[HEIGHT as i64, WIDTH as i64, 3], tch::Kind::Uint8);  
+        //// normalize image tensor
+        //let tensor = tensor.to_kind(tch::Kind::Float) / 255;
+        //// carry tensor to cuda
+        //// let tensor = tensor.to_device(tch::Device::Cuda(0)); 
+        //let tensor = tensor.to_device(tch::Device::Cpu); 
+        //// convert (H, W, C) to (C, H, W)
+        //let tensor = tensor.permute(&[2, 0, 1]); 
+        //// add batch dim (convert (C, H, W) to (N, C, H, W)) 
+        //let normalized_tensor = tensor.unsqueeze(0);   
 
-        // make prediction and time it. 
-        let start = time::Instant::now();
-        let probabilities = model.forward_ts(&[normalized_tensor])?.softmax(-1, tch::Kind::Float);  
-        let duration = start.elapsed();
-        println!("Probabilities: {:?}, Duration: {:?}", probabilities,  duration); 
+        stream.dequeue(|buf| {
+            let tensor = tch::vision::imagenet::load_image_from_memory(&*buf)
+                .expect("Error loading video capture as Tensor");
+            let probabilities = model.forward_ts(&[tensor.unsqueeze(0)])?.softmax(-1, tch::Kind::Float);  
 
-        // show image 
-        highgui::imshow(WINDOW_NAME, &frame)?;
-        // if button q pressed, abort.
-        if highgui::wait_key(5)? == 113 { 
-            highgui::destroy_all_windows()?;
-            println!("Pressed q. Aborting program.");
-            break;
-        }
+            Ok(())
+        })
+        .expect("Error dequeueing stream");
+
+        //// show image 
+        //highgui::imshow(WINDOW_NAME, &frame)?;
+        //// if button q pressed, abort.
+        //if highgui::wait_key(5)? == 113 { 
+        //    highgui::destroy_all_windows()?;
+        //    println!("Pressed q. Aborting program.");
+        //    break;
+        //}
     }
   
     Ok(())

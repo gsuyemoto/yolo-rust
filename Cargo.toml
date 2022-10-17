@@ -8,4 +8,5 @@ edition = "2021"
 [dependencies]
 tch = "0.7.0"
 anyhow = "1"
-opencv = "0.70" 
+## opencv = "0.70"
+linuxvideo = "0.1.1"
